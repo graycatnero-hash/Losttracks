@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>LostTracks</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head><body>
+<div class="app">
+<header><div><div class="logo">LOST<span>TRACKS</span></div><div class="sub">your personal music space</div></div><button id="addBtn" class="round">＋</button></header>
+<main>
+<section id="home" class="screen active">
+<div class="hero"><div class="hero-title">Your music.<br><b>Your rules.</b></div><div class="hero-text">Треки, которые хочется сохранить.</div>
+<button id="uploadBtn" class="primary">＋ Добавить трек</button><input id="fileInput" type="file" accept="audio/*" multiple hidden></div>
+<h2>Плейлисты</h2><div id="playlists" class="cards"></div><h2>Последние треки</h2><div id="tracks" class="tracks"></div>
+</section>
+<section id="playlist" class="screen"><button class="back" onclick="show('home')">← Назад</button><div id="playlistHeader"></div><div id="playlistTracks" class="tracks"></div></section>
+</main>
+<nav><button class="nav active">⌂<span>Главная</span></button><button class="nav" id="allBtn">♫<span>Треки</span></button><button class="nav" id="newPlaylistBtn">＋<span>Плейлист</span></button></nav>
+<div id="player" class="player hidden"><div class="now"><div id="nowTitle">—</div><div id="nowArtist">LostTracks</div></div><audio id="audio" controls></audio></div>
+</div><script src="app.js"></script></body></html>
