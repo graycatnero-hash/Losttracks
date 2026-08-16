@@ -8,14 +8,26 @@ if (tg) {
 const API = "https://divine-wood-93bc.graycatnero.workers.dev";
 
 let db;
+let currentPlaylistId = null;
 
-const request = indexedDB.open("LostTracksDB", 1);
+/* =========================
+   DATABASE
+========================= */
+
+const request = indexedDB.open("LostTracksDB", 2);
 
 request.onupgradeneeded = function (event) {
   db = event.target.result;
 
   if (!db.objectStoreNames.contains("tracks")) {
     db.createObjectStore("tracks", {
+      keyPath: "id",
+      autoIncrement: true
+    });
+  }
+
+  if (!db.objectStoreNames.contains("playlists")) {
+    db.createObjectStore("playlists", {
       keyPath: "id",
       autoIncrement: true
     });
@@ -27,25 +39,67 @@ request.onsuccess = function (event) {
   loadTelegramTracks();
 };
 
-function store(mode) {
-  return db.transaction("tracks", mode).objectStore("tracks");
+/* =========================
+   DATABASE HELPERS
+========================= */
+
+function store(name, mode) {
+  return db
+    .transaction(name, mode)
+    .objectStore(name);
 }
 
 function getTracks() {
   return new Promise((resolve, reject) => {
-    const request = store("readonly").getAll();
+    const req = store("tracks", "readonly").getAll();
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = reject;
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = reject;
   });
 }
 
 function addTrack(track) {
   return new Promise((resolve, reject) => {
-    const request = store("readwrite").add(track);
+    const req = store("tracks", "readwrite").add(track);
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = reject;
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = reject;
+  });
+}
+
+function getPlaylists() {
+  return new Promise((resolve, reject) => {
+    const req = store("playlists", "readonly").getAll();
+
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = reject;
+  });
+}
+
+function addPlaylist(playlist) {
+  return new Promise((resolve, reject) => {
+    const req = store("playlists", "readwrite").add(playlist);
+
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = reject;
+  });
+}
+
+function updatePlaylist(playlist) {
+  return new Promise((resolve, reject) => {
+    const req = store("playlists", "readwrite").put(playlist);
+
+    req.onsuccess = () => resolve();
+    req.onerror = reject;
+  });
+}
+
+function deletePlaylistFromDB(id) {
+  return new Promise((resolve, reject) => {
+    const req = store("playlists", "readwrite").delete(id);
+
+    req.onsuccess = () => resolve();
+    req.onerror = reject;
   });
 }
 
@@ -53,42 +107,15 @@ function addTrack(track) {
    TELEGRAM TRACKS
 ========================= */
 
-function findTelegramTrack(fileId) {
-  return new Promise((resolve, reject) => {
-    const request = store("readonly").getAll();
-
-    request.onsuccess = () => {
-      resolve(
-        request.result.find(
-          track => track.telegram && track.file_id === fileId
-        )
-      );
-    };
-
-    request.onerror = reject;
-  });
-}
-
-/* =========================
-   RENDER
-========================= */
 async function loadTelegramTracks() {
   try {
-    console.log("1. Подключаемся к Worker...");
-
     const response = await fetch(API + "/tracks");
 
-    console.log("2. Ответ Worker:", response.status);
-
     if (!response.ok) {
-      throw new Error("Worker вернул ошибку " + response.status);
+      throw new Error("Worker: " + response.status);
     }
 
     const telegramTracks = await response.json();
-
-    console.log("3. Треки из Telegram:", telegramTracks);
-
-    let added = 0;
 
     for (const track of telegramTracks) {
       const exists = await findTelegramTrack(track.file_id);
@@ -101,40 +128,54 @@ async function loadTelegramTracks() {
           artist: track.artist || "Unknown",
           mime_type: track.mime_type || "audio/mpeg",
           duration: track.duration || 0,
-          created: track.created || track.added_at || Date.now()
+          created:
+            track.created ||
+            track.added_at ||
+            Date.now()
         });
-
-        added++;
       }
     }
-
-    console.log("4. Добавлено новых:", added);
 
     await render();
 
   } catch (error) {
-    console.error("ОШИБКА TELEGRAM:", error);
-
-    // Показываем ошибку прямо на сайте
-    const tracksElement = document.getElementById("tracks");
-
-    if (tracksElement) {
-      tracksElement.innerHTML = `
-        <div class="empty">
-          Ошибка подключения к Telegram<br><br>
-          ${escapeHTML(error.message)}
-        </div>
-      `;
-    }
+    console.error("Telegram tracks error:", error);
+    await render();
   }
 }
+
+function findTelegramTrack(fileId) {
+  return new Promise((resolve, reject) => {
+    const req = store("tracks", "readonly").getAll();
+
+    req.onsuccess = () => {
+      resolve(
+        req.result.find(
+          track =>
+            track.telegram &&
+            track.file_id === fileId
+        )
+      );
+    };
+
+    req.onerror = reject;
+  });
+}
+
+/* =========================
+   MAIN RENDER
+========================= */
+
 async function render() {
   if (!db) return;
 
   const tracks = await getTracks();
+  const playlists = await getPlaylists();
 
-  document.getElementById("playlists").innerHTML = `
-    <div class="card" onclick="openPlaylist('All tracks')">
+  /* Playlists */
+
+  let playlistHTML = `
+    <div class="card" onclick="openAllTracks()">
       <b>All tracks</b>
       <small>${tracks.length} треков</small>
     </div>
@@ -145,25 +186,81 @@ async function render() {
     </div>
   `;
 
+  if (playlists.length) {
+    playlistHTML += playlists
+      .map(playlist => `
+        <div class="card"
+             onclick="openPlaylist(${playlist.id})">
+
+          <b>📁 ${escapeHTML(playlist.name)}</b>
+
+          <small>
+            ${playlist.tracks.length} треков
+          </small>
+
+        </div>
+      `)
+      .join("");
+  }
+
+  document.getElementById("playlists").innerHTML =
+    playlistHTML;
+
+  /* Recent tracks */
+
   document.getElementById("tracks").innerHTML =
     tracks.length
-      ? tracks.slice(-8).reverse().map(trackHTML).join("")
-      : '<div class="empty">Пока нет треков.<br>Добавь первый файл.</div>';
+      ? tracks
+          .slice()
+          .sort((a, b) =>
+            (b.created || 0) -
+            (a.created || 0)
+          )
+          .slice(0, 8)
+          .map(trackHTML)
+          .join("")
+      : `
+        <div class="empty">
+          Пока нет треков.<br>
+          Добавь первый файл.
+        </div>
+      `;
 }
+
+/* =========================
+   TRACK CARD
+========================= */
 
 function trackHTML(track) {
   return `
     <div class="track">
+
       <div class="cover">♫</div>
 
       <div class="meta">
-        <b>${escapeHTML(track.name)}</b>
-        <small>${escapeHTML(track.artist || "Unknown")}</small>
+        <b>
+          ${escapeHTML(track.name)}
+        </b>
+
+        <small>
+          ${escapeHTML(
+            track.artist || "Unknown"
+          )}
+        </small>
       </div>
 
-      <button class="play" onclick="playTrack(${track.id})">
+      <button
+        class="play"
+        onclick="playTrack(${track.id})">
         ▶
       </button>
+
+      <button
+        class="play"
+        onclick="showAddToPlaylist(${track.id})">
+        ＋
+      </button>
+
     </div>
   `;
 }
@@ -174,60 +271,101 @@ function trackHTML(track) {
 
 async function playTrack(id) {
   const tracks = await getTracks();
-  const track = tracks.find(item => item.id === id);
+
+  const track = tracks.find(
+    item => item.id === id
+  );
 
   if (!track) return;
 
-  const audio = document.getElementById("audio");
+  const audio =
+    document.getElementById("audio");
 
-  // Telegram track
   if (track.telegram) {
+
     audio.src =
       API +
       "/audio?file_id=" +
-      encodeURIComponent(track.file_id);
-  }
+      encodeURIComponent(
+        track.file_id
+      );
 
-  // Local file
-  else if (track.file) {
-    audio.src = URL.createObjectURL(track.file);
-  }
+  } else if (track.file) {
 
-  else {
+    audio.src =
+      URL.createObjectURL(track.file);
+
+  } else {
     return;
   }
 
-  audio.play();
+  document.getElementById(
+    "nowTitle"
+  ).textContent = track.name;
 
-  document.getElementById("nowTitle").textContent =
-    track.name;
-
-  document.getElementById("nowArtist").textContent =
+  document.getElementById(
+    "nowArtist"
+  ).textContent =
     track.artist || "LostTracks";
 
-  document.getElementById("player").classList.remove("hidden");
+  document
+    .getElementById("player")
+    .classList.remove("hidden");
+
+  try {
+    await audio.play();
+  } catch (error) {
+    console.error(
+      "Audio error:",
+      error
+    );
+  }
 }
 
 /* =========================
    LOCAL UPLOAD
 ========================= */
 
-document.getElementById("uploadBtn").onclick = function () {
-  document.getElementById("fileInput").click();
+document.getElementById(
+  "uploadBtn"
+).onclick = function () {
+
+  document
+    .getElementById("fileInput")
+    .click();
+
 };
 
-document.getElementById("addBtn").onclick = function () {
-  document.getElementById("fileInput").click();
+document.getElementById(
+  "addBtn"
+).onclick = function () {
+
+  document
+    .getElementById("fileInput")
+    .click();
+
 };
 
-document.getElementById("fileInput").onchange = async function (event) {
+document.getElementById(
+  "fileInput"
+).onchange = async function (event) {
+
   for (const file of event.target.files) {
+
     await addTrack({
-      name: file.name.replace(/\.[^/.]+$/, ""),
+      name:
+        file.name.replace(
+          /\.[^/.]+$/,
+          ""
+        ),
+
       artist: "Unknown",
+
       file: file,
+
       created: Date.now()
     });
+
   }
 
   event.target.value = "";
@@ -239,78 +377,521 @@ document.getElementById("fileInput").onchange = async function (event) {
    ALL TRACKS
 ========================= */
 
-document.getElementById("allBtn").onclick = async function () {
+document.getElementById(
+  "allBtn"
+).onclick = openAllTracks;
+
+async function openAllTracks() {
+
+  currentPlaylistId = null;
+
   show("playlist");
 
-  document.getElementById("playlistHeader").innerHTML =
-    "<h2>Все треки</h2>";
+  document.getElementById(
+    "playlistHeader"
+  ).innerHTML = `
+    <h2>Все треки</h2>
+  `;
 
   const tracks = await getTracks();
 
-  document.getElementById("playlistTracks").innerHTML =
-    tracks.length
-      ? tracks.map(trackHTML).join("")
-      : '<div class="empty">Нет треков</div>';
-};
+  document.getElementById(
+    "playlistTracks"
+  ).innerHTML = tracks.length
+
+    ? tracks.map(trackHTML).join("")
+
+    : `
+      <div class="empty">
+        Нет треков
+      </div>
+    `;
+}
 
 /* =========================
-   PLAYLISTS
+   NEW PLAYLIST
 ========================= */
 
-document.getElementById("newPlaylistBtn").onclick =
-  newPlaylist;
+document.getElementById(
+  "newPlaylistBtn"
+).onclick = newPlaylist;
 
-function newPlaylist() {
-  const name = prompt("Название плейлиста");
+async function newPlaylist() {
 
-  if (name) {
+  const name = prompt(
+    "Название плейлиста"
+  );
+
+  if (!name || !name.trim()) {
+    return;
+  }
+
+  const playlist = {
+
+    name: name.trim(),
+
+    tracks: [],
+
+    created: Date.now()
+
+  };
+
+  await addPlaylist(playlist);
+
+  await render();
+
+}
+
+/* =========================
+   OPEN PLAYLIST
+========================= */
+
+async function openPlaylist(id) {
+
+  const playlists =
+    await getPlaylists();
+
+  const playlist =
+    playlists.find(
+      item => item.id === id
+    );
+
+  if (!playlist) return;
+
+  currentPlaylistId = id;
+
+  show("playlist");
+
+  document.getElementById(
+    "playlistHeader"
+  ).innerHTML = `
+
+    <div style="
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    ">
+
+      <h2>
+        📁 ${escapeHTML(
+          playlist.name
+        )}
+      </h2>
+
+      <button
+        onclick="deletePlaylist(${id})">
+        🗑
+      </button>
+
+    </div>
+
+    <button
+      onclick="addTracksToCurrentPlaylist()">
+      ＋ Добавить треки
+    </button>
+
+  `;
+
+  await renderPlaylistTracks(
+    playlist
+  );
+}
+
+/* =========================
+   RENDER PLAYLIST TRACKS
+========================= */
+
+async function renderPlaylistTracks(
+  playlist
+) {
+
+  const tracks =
+    await getTracks();
+
+  const playlistTracks =
+    playlist.tracks
+      .map(id =>
+        tracks.find(
+          track =>
+            track.id === id
+        )
+      )
+      .filter(Boolean);
+
+  document.getElementById(
+    "playlistTracks"
+  ).innerHTML =
+
+    playlistTracks.length
+
+      ? playlistTracks
+          .map(
+            track =>
+              playlistTrackHTML(
+                track,
+                playlist.id
+              )
+          )
+          .join("")
+
+      : `
+        <div class="empty">
+          Плейлист пуст.<br>
+          Добавь в него треки.
+        </div>
+      `;
+}
+
+function playlistTrackHTML(
+  track,
+  playlistId
+) {
+
+  return `
+
+    <div class="track">
+
+      <div class="cover">
+        ♫
+      </div>
+
+      <div class="meta">
+
+        <b>
+          ${escapeHTML(
+            track.name
+          )}
+        </b>
+
+        <small>
+          ${escapeHTML(
+            track.artist ||
+            "Unknown"
+          )}
+        </small>
+
+      </div>
+
+      <button
+        class="play"
+        onclick="playTrack(${track.id})">
+        ▶
+      </button>
+
+      <button
+        class="play"
+        onclick="removeFromPlaylist(
+          ${playlistId},
+          ${track.id}
+        )">
+        −
+      </button>
+
+    </div>
+
+  `;
+}
+
+/* =========================
+   ADD TRACK TO PLAYLIST
+========================= */
+
+async function showAddToPlaylist(
+  trackId
+) {
+
+  const playlists =
+    await getPlaylists();
+
+  if (!playlists.length) {
+
+    const create =
+      confirm(
+        "У тебя пока нет плейлистов.\n\nСоздать новый?"
+      );
+
+    if (create) {
+      await newPlaylist();
+    }
+
+    return;
+  }
+
+  let text =
+    "Выбери плейлист:\n\n";
+
+  playlists.forEach(
+    (playlist, index) => {
+
+      text +=
+        `${index + 1}. ${playlist.name}\n`;
+
+    }
+  );
+
+  text +=
+    "\nВведи номер плейлиста:";
+
+  const answer =
+    prompt(text);
+
+  if (!answer) return;
+
+  const index =
+    Number(answer) - 1;
+
+  if (
+    index < 0 ||
+    index >= playlists.length
+  ) {
+
     alert(
-      "Плейлист «" +
-      name +
-      "» создан. Сохранение плейлистов добавим следующим этапом."
+      "Неверный номер."
+    );
+
+    return;
+  }
+
+  const playlist =
+    playlists[index];
+
+  if (
+    !playlist.tracks.includes(
+      trackId
+    )
+  ) {
+
+    playlist.tracks.push(
+      trackId
+    );
+
+    await updatePlaylist(
+      playlist
+    );
+
+    alert(
+      `Трек добавлен в «${playlist.name}»`
+    );
+
+  } else {
+
+    alert(
+      "Этот трек уже есть в плейлисте."
+    );
+
+  }
+
+}
+
+/* =========================
+   ADD MANY TRACKS
+========================= */
+
+async function addTracksToCurrentPlaylist() {
+
+  if (!currentPlaylistId) {
+    return;
+  }
+
+  const playlists =
+    await getPlaylists();
+
+  const playlist =
+    playlists.find(
+      p =>
+        p.id ===
+        currentPlaylistId
+    );
+
+  if (!playlist) return;
+
+  const tracks =
+    await getTracks();
+
+  if (!tracks.length) {
+
+    alert(
+      "У тебя пока нет треков."
+    );
+
+    return;
+  }
+
+  let text =
+    "Выбери треки по номерам.\n" +
+    "Например: 1,3,5\n\n";
+
+  tracks.forEach(
+    (track, index) => {
+
+      text +=
+        `${index + 1}. ${track.name}\n`;
+
+    }
+  );
+
+  const answer =
+    prompt(text);
+
+  if (!answer) return;
+
+  const numbers =
+    answer
+      .split(",")
+      .map(x =>
+        Number(x.trim()) - 1
+      )
+      .filter(
+        x =>
+          x >= 0 &&
+          x < tracks.length
+      );
+
+  for (const index of numbers) {
+
+    const track =
+      tracks[index];
+
+    if (
+      !playlist.tracks.includes(
+        track.id
+      )
+    ) {
+
+      playlist.tracks.push(
+        track.id
+      );
+
+    }
+
+  }
+
+  await updatePlaylist(
+    playlist
+  );
+
+  await openPlaylist(
+    playlist.id
+  );
+}
+
+/* =========================
+   REMOVE TRACK
+========================= */
+
+async function removeFromPlaylist(
+  playlistId,
+  trackId
+) {
+
+  const playlists =
+    await getPlaylists();
+
+  const playlist =
+    playlists.find(
+      p =>
+        p.id === playlistId
+    );
+
+  if (!playlist) return;
+
+  playlist.tracks =
+    playlist.tracks.filter(
+      id =>
+        id !== trackId
+    );
+
+  await updatePlaylist(
+    playlist
+  );
+
+  await openPlaylist(
+    playlistId
+  );
+}
+
+/* =========================
+   DELETE PLAYLIST
+========================= */
+
+async function deletePlaylist(
+  id
+) {
+
+  const playlists =
+    await getPlaylists();
+
+  const playlist =
+    playlists.find(
+      p => p.id === id
+    );
+
+  if (!playlist) return;
+
+  const confirmed =
+    confirm(
+      `Удалить плейлист «${playlist.name}»?`
+    );
+
+  if (!confirmed) return;
+
+  await deletePlaylistFromDB(
+    id
+  );
+
+  currentPlaylistId = null;
+
+  await render();
+
+  show("home");
+}
+
+/* =========================
+   SHOW SCREEN
+========================= */
+
+function show(id) {
+
+  document
+    .querySelectorAll(".screen")
+    .forEach(screen =>
+      screen.classList.remove(
+        "active"
+      )
+    );
+
+  const element =
+    document.getElementById(id);
+
+  if (element) {
+    element.classList.add(
+      "active"
     );
   }
 }
 
-async function openPlaylist(name) {
-  show("playlist");
-
-  document.getElementById("playlistHeader").innerHTML =
-    "<h2>" + escapeHTML(name) + "</h2>";
-
-  const tracks = await getTracks();
-
-  document.getElementById("playlistTracks").innerHTML =
-    tracks.length
-      ? tracks.map(trackHTML).join("")
-      : '<div class="empty">Нет треков</div>';
-}
-
 /* =========================
-   HELPERS
+   ESCAPE HTML
 ========================= */
 
-function show(id) {
-  document
-    .querySelectorAll(".screen")
-    .forEach(screen =>
-      screen.classList.remove("active")
-    );
-
-  document.getElementById(id).classList.add("active");
-}
-
 function escapeHTML(text) {
+
   return String(text).replace(
     /[&<>"']/g,
     function (character) {
+
       return {
+
         "&": "&amp;",
         "<": "&lt;",
         ">": "&gt;",
         '"': "&quot;",
         "'": "&#039;"
+
       }[character];
+
     }
-  )
+  );
+
 }
