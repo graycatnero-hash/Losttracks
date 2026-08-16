@@ -53,39 +53,6 @@ function addTrack(track) {
    TELEGRAM TRACKS
 ========================= */
 
-async function loadTelegramTracks() {
-  try {
-    const response = await fetch(API + "/tracks");
-
-    if (!response.ok) {
-      throw new Error("Worker error");
-    }
-
-    const telegramTracks = await response.json();
-
-    for (const track of telegramTracks) {
-      const exists = await findTelegramTrack(track.file_id);
-
-      if (!exists) {
-        await addTrack({
-          telegram: true,
-          file_id: track.file_id,
-          name: track.name || "Без названия",
-          artist: track.artist || "Unknown",
-          mime_type: track.mime_type || "audio/mpeg",
-          duration: track.duration || 0,
-          created: track.created || track.added_at || Date.now()
-        });
-      }
-    }
-
-    render();
-  } catch (error) {
-    console.error("Telegram tracks error:", error);
-    render();
-  }
-}
-
 function findTelegramTrack(fileId) {
   return new Promise((resolve, reject) => {
     const request = store("readonly").getAll();
@@ -105,7 +72,62 @@ function findTelegramTrack(fileId) {
 /* =========================
    RENDER
 ========================= */
+async function loadTelegramTracks() {
+  try {
+    console.log("1. Подключаемся к Worker...");
 
+    const response = await fetch(API + "/tracks");
+
+    console.log("2. Ответ Worker:", response.status);
+
+    if (!response.ok) {
+      throw new Error("Worker вернул ошибку " + response.status);
+    }
+
+    const telegramTracks = await response.json();
+
+    console.log("3. Треки из Telegram:", telegramTracks);
+
+    let added = 0;
+
+    for (const track of telegramTracks) {
+      const exists = await findTelegramTrack(track.file_id);
+
+      if (!exists) {
+        await addTrack({
+          telegram: true,
+          file_id: track.file_id,
+          name: track.name || "Без названия",
+          artist: track.artist || "Unknown",
+          mime_type: track.mime_type || "audio/mpeg",
+          duration: track.duration || 0,
+          created: track.created || track.added_at || Date.now()
+        });
+
+        added++;
+      }
+    }
+
+    console.log("4. Добавлено новых:", added);
+
+    await render();
+
+  } catch (error) {
+    console.error("ОШИБКА TELEGRAM:", error);
+
+    // Показываем ошибку прямо на сайте
+    const tracksElement = document.getElementById("tracks");
+
+    if (tracksElement) {
+      tracksElement.innerHTML = `
+        <div class="empty">
+          Ошибка подключения к Telegram<br><br>
+          ${escapeHTML(error.message)}
+        </div>
+      `;
+    }
+  }
+}
 async function render() {
   if (!db) return;
 
