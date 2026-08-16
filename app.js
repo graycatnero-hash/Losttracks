@@ -5,6 +5,8 @@ if (tg) {
   tg.expand();
 }
 
+const API = "https://divine-wood-93bc.graycatnero.workers.dev";
+
 let db;
 
 const request = indexedDB.open("LostTracksDB", 1);
@@ -22,7 +24,7 @@ request.onupgradeneeded = function (event) {
 
 request.onsuccess = function (event) {
   db = event.target.result;
-  render();
+  loadTelegramTracks();
 };
 
 function store(mode) {
@@ -46,6 +48,63 @@ function addTrack(track) {
     request.onerror = reject;
   });
 }
+
+/* =========================
+   TELEGRAM TRACKS
+========================= */
+
+async function loadTelegramTracks() {
+  try {
+    const response = await fetch(API + "/tracks");
+
+    if (!response.ok) {
+      throw new Error("Worker error");
+    }
+
+    const telegramTracks = await response.json();
+
+    for (const track of telegramTracks) {
+      const exists = await findTelegramTrack(track.file_id);
+
+      if (!exists) {
+        await addTrack({
+          telegram: true,
+          file_id: track.file_id,
+          name: track.name || "Без названия",
+          artist: track.artist || "Unknown",
+          mime_type: track.mime_type || "audio/mpeg",
+          duration: track.duration || 0,
+          created: track.created || track.added_at || Date.now()
+        });
+      }
+    }
+
+    render();
+  } catch (error) {
+    console.error("Telegram tracks error:", error);
+    render();
+  }
+}
+
+function findTelegramTrack(fileId) {
+  return new Promise((resolve, reject) => {
+    const request = store("readonly").getAll();
+
+    request.onsuccess = () => {
+      resolve(
+        request.result.find(
+          track => track.telegram && track.file_id === fileId
+        )
+      );
+    };
+
+    request.onerror = reject;
+  });
+}
+
+/* =========================
+   RENDER
+========================= */
 
 async function render() {
   if (!db) return;
@@ -87,6 +146,10 @@ function trackHTML(track) {
   `;
 }
 
+/* =========================
+   PLAYER
+========================= */
+
 async function playTrack(id) {
   const tracks = await getTracks();
   const track = tracks.find(item => item.id === id);
@@ -95,15 +158,37 @@ async function playTrack(id) {
 
   const audio = document.getElementById("audio");
 
-  audio.src = URL.createObjectURL(track.file);
+  // Telegram track
+  if (track.telegram) {
+    audio.src =
+      API +
+      "/audio?file_id=" +
+      encodeURIComponent(track.file_id);
+  }
+
+  // Local file
+  else if (track.file) {
+    audio.src = URL.createObjectURL(track.file);
+  }
+
+  else {
+    return;
+  }
+
   audio.play();
 
-  document.getElementById("nowTitle").textContent = track.name;
+  document.getElementById("nowTitle").textContent =
+    track.name;
+
   document.getElementById("nowArtist").textContent =
     track.artist || "LostTracks";
 
   document.getElementById("player").classList.remove("hidden");
 }
+
+/* =========================
+   LOCAL UPLOAD
+========================= */
 
 document.getElementById("uploadBtn").onclick = function () {
   document.getElementById("fileInput").click();
@@ -124,8 +209,13 @@ document.getElementById("fileInput").onchange = async function (event) {
   }
 
   event.target.value = "";
+
   render();
 };
+
+/* =========================
+   ALL TRACKS
+========================= */
 
 document.getElementById("allBtn").onclick = async function () {
   show("playlist");
@@ -141,7 +231,12 @@ document.getElementById("allBtn").onclick = async function () {
       : '<div class="empty">Нет треков</div>';
 };
 
-document.getElementById("newPlaylistBtn").onclick = newPlaylist;
+/* =========================
+   PLAYLISTS
+========================= */
+
+document.getElementById("newPlaylistBtn").onclick =
+  newPlaylist;
 
 function newPlaylist() {
   const name = prompt("Название плейлиста");
@@ -169,22 +264,31 @@ async function openPlaylist(name) {
       : '<div class="empty">Нет треков</div>';
 }
 
+/* =========================
+   HELPERS
+========================= */
+
 function show(id) {
   document
     .querySelectorAll(".screen")
-    .forEach(screen => screen.classList.remove("active"));
+    .forEach(screen =>
+      screen.classList.remove("active")
+    );
 
   document.getElementById(id).classList.add("active");
 }
 
 function escapeHTML(text) {
-  return String(text).replace(/[&<>"']/g, function (character) {
-    return {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;"
-    }[character];
-  });
+  return String(text).replace(
+    /[&<>"']/g,
+    function (character) {
+      return {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+      }[character];
+    }
+  )
 }
